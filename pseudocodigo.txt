@@ -16,7 +16,7 @@ Parâmetros
   MAX_ESCALAS = 2
   P_ESPERA = 0,5             (espera geométrica na geração livre; sem máximo)
   TAM_POPULACAO = 40         MAX_GERACOES = 500
-  N_ELITE = 2                TAM_TORNEIO = 3
+  N_ELITE = 2                FRACAO_REPRODUTORES = 0,10 (10% melhores = 4 de 40)
   TAXA_CRUZAMENTO = 0,9      TAXA_MUTACAO = 0,04 (por aeronave)
   (não há nº máximo de voos por aeronave nem espera máxima: a validação
    decide o que é possível e a seleção decide o que é bom)
@@ -76,10 +76,11 @@ fitness ← [s.fitness para cada s em score_list]
 ordem   ← índices de genomas em ordem decrescente de fitness
 
 nova ← [genomas[ordem[0]], ..., genomas[ordem[N_ELITE − 1]]]     # elitismo
+reprodutores ← SELECAO_TRUNCAMENTO(fitness)                      # os 10% melhores
 
 enquanto tamanho(nova) < TAM_POPULACAO:
-    pai ← genomas[SELECAO_TORNEIO(fitness, rng)]
-    mae ← genomas[SELECAO_TORNEIO(fitness, rng)]
+    pai ← genomas[sorteia um de reprodutores]    # chance igual, com reposição:
+    mae ← genomas[sorteia um de reprodutores]    # pai e mãe podem ser o mesmo
     se rng.aleatorio() < TAXA_CRUZAMENTO:
         filho ← CRUZAMENTO_UNIFORME(pai, mae, rng)
     senão:
@@ -144,10 +145,14 @@ VALIDAR_GENOMA(genoma) → lista de violações
 
 
 -----------------------------------------------------------------------------
-2.2 SELECAO_TORNEIO(fitness, rng)                           [Seção 4.3]
+2.2 SELECAO_TRUNCAMENTO(fitness)                            [Seção 4.3]
 -----------------------------------------------------------------------------
-candidatos ← sorteia TAM_TORNEIO índices distintos da população
-devolve o candidato de maior fitness
+Só os melhores reproduzem. Pai e mãe são depois sorteados desse grupo com
+reposição (CRIA_GERACAO), então cada reprodutor tem 25% de chance por sorteio.
+
+n ← máximo(2, arredonda(FRACAO_REPRODUTORES × tamanho(fitness)))   # 40 → 4
+ordem ← índices em ordem decrescente de fitness
+devolve ordem[0 .. n − 1]
 
 
 -----------------------------------------------------------------------------
