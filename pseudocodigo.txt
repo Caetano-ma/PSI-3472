@@ -1,0 +1,313 @@
+PSI3472 — Planejamento de Voos Nacionais com Algoritmo Genético
+Pseudocódigo do programa (corresponde ao notebook planejamento_voos.ipynb)
+=============================================================================
+
+Convenções
+  ←            atribuição
+  FIM          destino especial: a aeronave encerra o dia
+  rng          gerador de números aleatórios com semente fixa (resultado reproduzível)
+  TV[a][b]     tempo de voo, em horas, de a para b (TAB_TV)
+  DEMANDA[o,d] passageiros por dia de o para d (TAB_OD)
+
+Parâmetros
+  N_AERONAVES = 400          CAPACIDADE = 200
+  PRIMEIRA_DECOLAGEM = 6h    ULTIMA_DECOLAGEM = 21h
+  TURNAROUND = 1h            (aeronave em solo entre pousar e decolar)
+  ESCALA_MIN = 1h            (passageiro, entre chegada e próxima partida)
+  MAX_TRECHOS = 8            (voos por aeronave por dia)
+  ESPERA_MAX = 3h            MAX_ESCALAS = 2
+  TAM_POPULACAO = 40         MAX_GERACOES = 300
+  N_ELITE = 2                TAM_TORNEIO = 3
+  TAXA_CRUZAMENTO = 0,9      TAXA_MUTACAO = 0,005 (por aeronave)
+  LIMIAR = 0,001             PACIENCIA = 30
+  P_REM = 100   P_TV = 1   P_AV = 5            (pesos da fitness)
+
+Estruturas de dados (classes)
+  GeneAeronave   base, trechos = [(destino, espera)] × MAX_TRECHOS
+  Genoma         lista de 400 GeneAeronave (um gene por aeronave)
+  Voo            id, aeronave, origem, destino, partida, chegada, ocupacao {(o,d): n}
+  Aeronave       id, base, voos
+  Plano          aeronaves, voos, voos_por_trecho          → TAB_AV, TAB_PV, TAB_MV
+  GrupoPax       origem, destino, voos (rota), n           → linhas da TAB_AP
+  Alocacao       plano, grupos, remanescentes              → TAB_AP
+  Avaliacao      fitness, custo e métricas (atendidos, tempos, voos, ocupação, ...)
+
+
+=============================================================================
+1. PROGRAMA PRINCIPAL — ALGORITMO_GENETICO
+=============================================================================
+
+rng ← Random(SEMENTE)
+genomas_gen ← []
+score_list_old ← nada
+historico ← []
+
+para i ← 0 até MAX_GERACOES − 1:
+    genomas_gen      ← CRIA_GERACAO(genomas_gen, score_list_old, rng)
+    AP_list, AV_list ← CRIA_TABELAS(genomas_gen)
+    score_list_new   ← SCORE(AP_list, AV_list)
+
+    historico[i] ← maior fitness, fitness média, menor fitness e
+                   métricas do melhor indivíduo da geração i
+
+    se i ≥ PACIENCIA e
+       historico[i].melhor − historico[i − PACIENCIA].melhor ≤ LIMIAR:
+        fit ← verdadeiro                       # convergiu
+        pare
+
+    score_list_old ← score_list_new
+
+best ← índice do maior fitness em score_list_new
+        # por causa do elitismo, é o melhor de todas as gerações
+MOSTRA_TABELA(AP_list[best])
+desenha os gráficos de evolução a partir de historico
+
+
+=============================================================================
+2. CRIA_GERACAO(genomas, score_list, rng)                  [Seção 4.4]
+=============================================================================
+
+se genomas está vazia:                         # 1ª geração
+    devolve [GENOMA_ALEATORIO(rng) repetido TAM_POPULACAO vezes]
+
+fitness ← [s.fitness para cada s em score_list]
+ordem   ← índices de genomas em ordem decrescente de fitness
+
+nova ← [genomas[ordem[0]], ..., genomas[ordem[N_ELITE − 1]]]     # elitismo
+
+enquanto tamanho(nova) < TAM_POPULACAO:
+    pai ← genomas[SELECAO_TORNEIO(fitness, rng)]
+    mae ← genomas[SELECAO_TORNEIO(fitness, rng)]
+    se rng.aleatorio() < TAXA_CRUZAMENTO:
+        filho ← CRUZAMENTO_UNIFORME(pai, mae, rng)
+    senão:
+        filho ← cópia de pai
+    filho ← MUTACAO(filho, rng)
+    nova.adiciona(filho)
+
+devolve nova
+
+
+-----------------------------------------------------------------------------
+2.1 GENOMA_ALEATORIO(rng)                                   [Seção 1.4]
+-----------------------------------------------------------------------------
+Leis da física: nunca voa para o aeroporto onde já está; no máximo
+MAX_TRECHOS voos. Os horários não são sorteados (o decodificador os calcula).
+
+genoma ← []
+repetir N_AERONAVES vezes:
+    base ← sorteia entre os 14 aeroportos
+    local ← base ; trechos ← []
+    repetir MAX_TRECHOS vezes:
+        destino ← sorteia entre os 13 aeroportos ≠ local
+        espera  ← sorteia inteiro em [0, ESPERA_MAX]
+        trechos.adiciona((destino, espera))
+        local ← destino
+    genoma.adiciona(GeneAeronave(base, trechos))
+devolve genoma
+
+
+-----------------------------------------------------------------------------
+2.2 SELECAO_TORNEIO(fitness, rng)                           [Seção 4.3]
+-----------------------------------------------------------------------------
+candidatos ← sorteia TAM_TORNEIO índices distintos da população
+devolve o candidato de maior fitness
+
+
+-----------------------------------------------------------------------------
+2.3 CRUZAMENTO_UNIFORME(pai, mae, rng)                      [Seção 4.3]
+-----------------------------------------------------------------------------
+A unidade de troca é o gene inteiro de uma aeronave (rota do dia), que já
+respeita a física ⇒ o filho é sempre válido.
+
+filho ← []
+para k ← 1 até N_AERONAVES:
+    se rng.aleatorio() < 0,5:  filho[k] ← pai[k]
+    senão:                     filho[k] ← mae[k]
+devolve filho
+
+
+-----------------------------------------------------------------------------
+2.4 MUTACAO(genoma, rng)                                    [Seção 4.4]
+-----------------------------------------------------------------------------
+para cada gene g do genoma:
+    se rng.aleatorio() < TAXA_MUTACAO:
+        g ← MUTAR_GENE(g, rng)              # devolve gene novo; não altera o original
+devolve genoma
+
+
+MUTAR_GENE(gene, rng)
+    n ← N_TRECHOS_ATIVOS(gene)
+    tipo ← sorteia entre {destino, espera, base, encurtar, alongar}
+    se n = 0 e tipo ∈ {destino, espera, encurtar}:
+        tipo ← alongar                      # aeronave parada: só dá para acrescentar voo
+
+    caso tipo:
+      destino:   i ← sorteia trecho ativo em [0, n)
+                 antes  ← base se i = 0, senão destino do trecho i−1
+                 depois ← destino do trecho i+1 (se existir)
+                 destino do trecho i ← sorteia aeroporto ∉ {antes, depois, atual}
+      espera:    i ← sorteia trecho ativo em [0, n)
+                 espera do trecho i ← sorteia em [0, ESPERA_MAX], diferente da atual
+      base:      base ← sorteia aeroporto ∉ {base atual, destino do 1º trecho}
+      encurtar:  trecho n−1 e seguintes ← FIM
+      alongar:   trechos a partir de n ← FIM
+                 se n < MAX_TRECHOS:
+                     local ← base se n = 0, senão destino do trecho n−1
+                     trecho n ← (sorteia aeroporto ≠ local, sorteia espera)
+    devolve GeneAeronave(base, trechos)
+
+
+N_TRECHOS_ATIVOS(gene)                      # quantos trechos viram voo de fato
+    local ← base ; disponivel ← PRIMEIRA_DECOLAGEM ; n ← 0
+    para cada (destino, espera) em trechos:
+        se destino = FIM ou disponivel + espera > ULTIMA_DECOLAGEM: pare
+        disponivel ← disponivel + espera + TV[local][destino] + TURNAROUND
+        local ← destino ; n ← n + 1
+    devolve n
+
+
+=============================================================================
+3. CRIA_TABELAS(genomas)                                    [Seção 2.5]
+=============================================================================
+
+AV_list ← [DECODIFICAR(g) para cada genoma g]               # TAB_AV
+AP_list ← [ALOCAR_PASSAGEIROS(p) para cada plano p em AV_list]   # TAB_AP
+devolve AP_list, AV_list
+
+
+-----------------------------------------------------------------------------
+3.1 DECODIFICAR(genoma) → Plano                             [Seção 1.3]
+-----------------------------------------------------------------------------
+voos ← []
+para cada aeronave a (com seu gene) do genoma:
+    local ← gene.base ; disponivel ← PRIMEIRA_DECOLAGEM
+    para cada (destino, espera) em gene.trechos:
+        se destino = FIM: pare
+        partida ← disponivel + espera
+        se partida > ULTIMA_DECOLAGEM: pare      # trechos restantes ficam inativos
+        chegada ← partida + TV[local][destino]
+        cria Voo(a, local → destino, partida, chegada) e adiciona em voos
+        local ← destino
+        disponivel ← chegada + TURNAROUND
+indexa os voos por trecho (origem, destino), em ordem de partida
+devolve Plano(aeronaves, voos, voos_por_trecho)
+
+
+-----------------------------------------------------------------------------
+3.2 ALOCAR_PASSAGEIROS(plano) → Alocacao                    [Seção 2.3]
+-----------------------------------------------------------------------------
+zera a ocupação de todos os voos
+vagas ← índice dos voos com vaga, por trecho, em ordem de partida
+restantes[o,d] ← DEMANDA[o,d] para cada par O-D
+grupos ← []
+
+EMBARCAR(par, rota, n):
+    para cada voo v da rota: v.ocupacao[par] += n ; vagas[v] −= n
+    grupos.adiciona(GrupoPax(par, rota, n))
+    restantes[par] −= n
+
+# Parte 1 — voos diretos
+para cada par (o, d):
+    para cada voo v de o → d com vaga, em ordem de partida:
+        se restantes[o,d] = 0: pare
+        EMBARCAR((o,d), [v], min(restantes[o,d], vagas[v]))
+
+# Parte 2 — escalas, usando as vagas que sobraram
+para k ← 1 até MAX_ESCALAS:
+    pendentes ← pares com restantes > 0, em ordem decrescente de restantes
+    para cada par (o, d) em pendentes:
+        enquanto restantes[o,d] > 0:
+            rota ← MELHOR_ROTA(o, d, k)
+            se rota não existe: pare
+            EMBARCAR((o,d), rota, min(restantes[o,d], menor vaga entre os voos da rota))
+
+remanescentes ← pares com restantes > 0          # contam como erro na fitness
+devolve Alocacao(plano, grupos, remanescentes)
+
+
+MELHOR_ROTA(o, d, k)
+    Rota de o até d com 1..k escalas, só com voos com vaga, de menor tempo de
+    viagem (chegada final − 1ª partida). MIN_H[a][b] = menor tempo possível de
+    a até b com escalas (Floyd-Warshall sobre a TAB_TV), usado só para podar.
+
+    candidatos ← cada voo v1 com vaga de o → m, m ≠ d,
+                 com limite_inferior = duração(v1) + ESCALA_MIN + MIN_H[m][d]
+    ordena candidatos por (limite_inferior, partida)
+    melhor ← nada ; melhor_t ← ∞
+    para cada v1 em candidatos:
+        se limite_inferior(v1) ≥ melhor_t: pare     # nenhum candidato restante bate o melhor
+        rota ← ROTA_MAIS_CEDO(v1, o, d, k, limite = v1.partida + melhor_t)
+        se rota existe:
+            melhor ← rota ; melhor_t ← chegada(rota) − v1.partida
+    devolve melhor
+
+
+ROTA_MAIS_CEDO(v1, o, d, k, limite)
+    Busca em largura, uma rodada por escala. Em cada aeroporto basta o primeiro
+    voo com vaga depois da escala mínima: um voo mais tarde nunca chega antes.
+
+    rotulo[v1.destino] ← v1.chegada                 # chegada mais cedo conhecida
+    fronteira ← [(v1.destino, v1.chegada, [v1])]
+    melhor ← nada
+    para rodada ← 1 até k:
+        nova ← []
+        para cada (a, cheg, rota) em fronteira:
+            t ← cheg + ESCALA_MIN
+            se t + MIN_H[a][d] ≥ limite: continue
+            proximos ← {d} se rodada = k, senão todos os aeroportos ≠ a
+            para cada p em proximos, p ≠ o:
+                v ← primeiro voo a → p com vaga e partida ≥ t
+                se v não existe: continue
+                se p = d e v.chegada < limite:
+                    limite ← v.chegada ; melhor ← rota + [v]
+                senão se p ≠ d e v.chegada < rotulo[p]
+                         e v.chegada + ESCALA_MIN + MIN_H[p][d] < limite:
+                    rotulo[p] ← v.chegada
+                    nova.adiciona((p, v.chegada, rota + [v]))
+        fronteira ← nova
+        se fronteira vazia: pare
+    devolve melhor
+
+
+=============================================================================
+4. SCORE(AP_list, AV_list)                                  [Seção 3.2]
+=============================================================================
+
+devolve [AVALIAR_ALOCACAO(ap) para cada ap em AP_list]
+
+
+AVALIAR_ALOCACAO(aloc) → Avaliacao                          [Seção 3.1]
+    atendidos     ← soma de n de todos os grupos
+    remanescentes ← demanda total − atendidos
+    T_viagem      ← soma, em todos os grupos, de n × (chegada final − 1ª partida)
+    T_voo_pax     ← soma, em todos os grupos, de n × (horas no ar)
+    H_aeronaves   ← soma das durações de todos os voos do plano
+
+    custo   ← P_REM × remanescentes + P_TV × T_viagem + P_AV × H_aeronaves
+    fitness ← 10 × (CUSTO_VAZIO − custo) / (CUSTO_VAZIO − CUSTO_IDEAL)
+              # score de 0 a 10: quanto mais perto de 10, melhor
+
+    CUSTO_VAZIO ← P_REM × demanda total                     # score 0: nenhum voo
+    CUSTO_IDEAL ← soma, em cada par (o,d), de                # score 10: mundo ideal,
+                  (P_TV × DEMANDA[o,d] + P_AV × ⌈DEMANDA[o,d]/200⌉) × TV[o][d]
+                  # todos em voo direto, com o mínimo de voos
+
+    devolve Avaliacao(fitness, custo, atendidos, remanescentes, T_viagem,
+                      T_voo_pax, nº de voos, aeronaves usadas, H_aeronaves,
+                      voos vazios, ocupação média)
+
+Hierarquia dos pesos: P_REM (100) > pior viagem (21 h) × P_TV + voo mais
+longo (6 h) × P_AV ⇒ atender um passageiro a mais sempre reduz o custo.
+
+
+=============================================================================
+5. MOSTRA_TABELA(aloc)                                      [Seção 2.5]
+=============================================================================
+
+exibe TAB_AP por grupo (faixa de cartões P000001–P000200, rota, escalas, horários)
+exibe amostra da TAB_AP por passageiro:
+      passageiroPPPPPP: [ (Orig)(Dest) ] [ vooVVVV | vooVVVV ]
+exibe TAB_AV  (voo, aeronave, origem, destino, partida, chegada, nº de passageiros)
+exibe TAB_PV  (por aeronave: base, nº de voos, horas de voo, sequência de voos)
+exibe TAB_MV  (nº de decolagens por aeroporto de origem × horário)
