@@ -4,7 +4,6 @@ Pseudocódigo do programa (corresponde ao notebook planejamento_voos.ipynb)
 
 Convenções
   ←            atribuição
-  FIM          destino especial: a aeronave encerra o dia
   rng          gerador de números aleatórios com semente fixa (resultado reproduzível)
   TV[a][b]     tempo de voo, em horas, de a para b (TAB_TV)
   DEMANDA[o,d] passageiros por dia de o para d (TAB_OD)
@@ -14,16 +13,18 @@ Parâmetros
   PRIMEIRA_DECOLAGEM = 6h    ULTIMA_DECOLAGEM = 21h
   TURNAROUND = 1h            (aeronave em solo entre pousar e decolar)
   ESCALA_MIN = 1h            (passageiro, entre chegada e próxima partida)
-  MAX_TRECHOS = 8            (voos por aeronave por dia)
-  ESPERA_MAX = 3h            MAX_ESCALAS = 2
-  TAM_POPULACAO = 40         MAX_GERACOES = 300
+  MAX_ESCALAS = 2
+  P_ESPERA = 0,5             (espera geométrica na geração livre; sem máximo)
+  TAM_POPULACAO = 40         MAX_GERACOES = 500
   N_ELITE = 2                TAM_TORNEIO = 3
-  TAXA_CRUZAMENTO = 0,9      TAXA_MUTACAO = 0,005 (por aeronave)
+  TAXA_CRUZAMENTO = 0,9      TAXA_MUTACAO = 0,04 (por aeronave)
+  (não há nº máximo de voos por aeronave nem espera máxima: a validação
+   decide o que é possível e a seleção decide o que é bom)
   LIMIAR = 0,001             PACIENCIA = 30
   P_REM = 100   P_TV = 1   P_AV = 5            (pesos da fitness)
 
 Estruturas de dados (classes)
-  GeneAeronave   base, trechos = [(destino, espera)] × MAX_TRECHOS
+  GeneAeronave   base, trechos = [(destino, espera), ...]  (qualquer tamanho)
   Genoma         lista de 400 GeneAeronave (um gene por aeronave)
   Voo            id, aeronave, origem, destino, partida, chegada, ocupacao {(o,d): n}
   Aeronave       id, base, voos
@@ -69,6 +70,7 @@ desenha os gráficos de evolução a partir de historico
 
 se genomas está vazia:                         # 1ª geração
     devolve [GENOMA_ALEATORIO(rng) repetido TAM_POPULACAO vezes]
+             # cada genoma já sai válido (genes validados um a um)
 
 fitness ← [s.fitness para cada s em score_list]
 ordem   ← índices de genomas em ordem decrescente de fitness
@@ -83,6 +85,9 @@ enquanto tamanho(nova) < TAM_POPULACAO:
     senão:
         filho ← cópia de pai
     filho ← MUTACAO(filho, rng)
+    se VALIDAR_GENOMA(filho) tem violações:      # etapa de validação
+        descarta filho                           # inviável: gera outro no lugar
+        continua
     nova.adiciona(filho)
 
 devolve nova
@@ -91,20 +96,51 @@ devolve nova
 -----------------------------------------------------------------------------
 2.1 GENOMA_ALEATORIO(rng)                                   [Seção 1.4]
 -----------------------------------------------------------------------------
-Leis da física: nunca voa para o aeroporto onde já está; no máximo
-MAX_TRECHOS voos. Os horários não são sorteados (o decodificador os calcula).
+Os genes são sorteados sem regra nenhuma e passam pela validação. Só ~1 em
+cada 4 sai válido, então o genoma é montado gene a gene (descartar o genoma
+inteiro a cada gene inválido exigiria acertar os 400 de uma vez: chance ≈ 0).
 
 genoma ← []
-repetir N_AERONAVES vezes:
-    base ← sorteia entre os 14 aeroportos
-    local ← base ; trechos ← []
-    repetir MAX_TRECHOS vezes:
-        destino ← sorteia entre os 13 aeroportos ≠ local
-        espera  ← sorteia inteiro em [0, ESPERA_MAX]
-        trechos.adiciona((destino, espera))
-        local ← destino
-    genoma.adiciona(GeneAeronave(base, trechos))
+enquanto tamanho(genoma) < N_AERONAVES:
+    g ← GENE_LIVRE(rng)
+    se VERIFICAR_GENE(g) tem violações: descarta g ; continua
+    genoma.adiciona(g)
 devolve genoma
+
+
+GENE_LIVRE(rng)                             # sorteio sem nenhuma restrição
+    base ← sorteia entre os 14 aeroportos
+    trechos ← []
+    repetir:
+        s ← sorteia entre {14 aeroportos, "fim do dia"}   (chance igual)
+        se s = "fim do dia": pare
+        trechos.adiciona((s, ESPERA_ALEATORIA(rng)))      # s pode ser o aeroporto atual
+    devolve GeneAeronave(base, trechos)
+
+
+ESPERA_ALEATORIA(rng)                       # geométrica, sem máximo
+    k ← 0
+    enquanto rng.aleatorio() ≥ P_ESPERA: k ← k + 1
+    devolve k                               # 0 h: 50%, 1 h: 25%, 2 h: 12,5%, ...
+
+
+VERIFICAR_GENE(gene) → lista de violações   # leis da física
+    erros ← []
+    local ← base ; disponivel ← PRIMEIRA_DECOLAGEM
+    para cada (destino, espera) em trechos:
+        se destino = local:     erros.adiciona("voo para o próprio aeroporto")
+        se espera < 0:          erros.adiciona("espera negativa")
+        partida ← disponivel + espera
+        se partida > ULTIMA_DECOLAGEM:
+            erros.adiciona("decolagem depois das 21h") ; pare
+        disponivel ← partida + TV[local][destino] + TURNAROUND
+        local ← destino
+    devolve erros
+
+
+VALIDAR_GENOMA(genoma) → lista de violações
+    se tamanho(genoma) ≠ N_AERONAVES: devolve ["nº de genes errado"]
+    devolve a junção de VERIFICAR_GENE(g) para cada gene g do genoma
 
 
 -----------------------------------------------------------------------------
@@ -117,8 +153,8 @@ devolve o candidato de maior fitness
 -----------------------------------------------------------------------------
 2.3 CRUZAMENTO_UNIFORME(pai, mae, rng)                      [Seção 4.3]
 -----------------------------------------------------------------------------
-A unidade de troca é o gene inteiro de uma aeronave (rota do dia), que já
-respeita a física ⇒ o filho é sempre válido.
+A unidade de troca é o gene inteiro de uma aeronave (rota do dia). Como os
+pais são válidos, o cruzamento sozinho não gera filho inválido; a mutação pode.
 
 filho ← []
 para k ← 1 até N_AERONAVES:
@@ -136,35 +172,19 @@ para cada gene g do genoma:
 devolve genoma
 
 
-MUTAR_GENE(gene, rng)
-    n ← N_TRECHOS_ATIVOS(gene)
-    tipo ← sorteia entre {destino, espera, base, encurtar, alongar}
-    se n = 0 e tipo ∈ {destino, espera, encurtar}:
-        tipo ← alongar                      # aeronave parada: só dá para acrescentar voo
+MUTAR_GENE(gene, rng)                       # mutação livre: não olha a física
+    n ← nº de trechos do gene
+    tipo ← sorteia entre {base, inserir}  ∪  ({destino, espera, remover} se n > 0)
 
     caso tipo:
-      destino:   i ← sorteia trecho ativo em [0, n)
-                 antes  ← base se i = 0, senão destino do trecho i−1
-                 depois ← destino do trecho i+1 (se existir)
-                 destino do trecho i ← sorteia aeroporto ∉ {antes, depois, atual}
-      espera:    i ← sorteia trecho ativo em [0, n)
-                 espera do trecho i ← sorteia em [0, ESPERA_MAX], diferente da atual
-      base:      base ← sorteia aeroporto ∉ {base atual, destino do 1º trecho}
-      encurtar:  trecho n−1 e seguintes ← FIM
-      alongar:   trechos a partir de n ← FIM
-                 se n < MAX_TRECHOS:
-                     local ← base se n = 0, senão destino do trecho n−1
-                     trecho n ← (sorteia aeroporto ≠ local, sorteia espera)
+      base:      base ← sorteia entre os 14 aeroportos
+      inserir:   i ← sorteia posição em [0, n]
+                 insere (sorteia aeroporto, ESPERA_ALEATORIA) na posição i
+      destino:   i ← sorteia trecho ; destino do trecho i ← sorteia aeroporto
+      espera:    i ← sorteia trecho ; espera do trecho i ← ESPERA_ALEATORIA
+      remover:   i ← sorteia trecho ; remove o trecho i
     devolve GeneAeronave(base, trechos)
-
-
-N_TRECHOS_ATIVOS(gene)                      # quantos trechos viram voo de fato
-    local ← base ; disponivel ← PRIMEIRA_DECOLAGEM ; n ← 0
-    para cada (destino, espera) em trechos:
-        se destino = FIM ou disponivel + espera > ULTIMA_DECOLAGEM: pare
-        disponivel ← disponivel + espera + TV[local][destino] + TURNAROUND
-        local ← destino ; n ← n + 1
-    devolve n
+    # se o resultado violar a física, o filho inteiro é descartado em CRIA_GERACAO
 
 
 =============================================================================
@@ -183,9 +203,7 @@ voos ← []
 para cada aeronave a (com seu gene) do genoma:
     local ← gene.base ; disponivel ← PRIMEIRA_DECOLAGEM
     para cada (destino, espera) em gene.trechos:
-        se destino = FIM: pare
-        partida ← disponivel + espera
-        se partida > ULTIMA_DECOLAGEM: pare      # trechos restantes ficam inativos
+        partida ← disponivel + espera            # genoma já validado: não há o que corrigir
         chegada ← partida + TV[local][destino]
         cria Voo(a, local → destino, partida, chegada) e adiciona em voos
         local ← destino
